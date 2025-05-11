@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/patrickmn/go-cache"
 	"io"
 	"log"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 var (
 	baseUrl    = "http://apis.data.go.kr/1230000/ao/PubDataOpnStdService/getDataSetOpnStdBidPblancInfo"
 	serviceKey = ""
+	localCache = &cache.Cache{}
 )
 
 func createBidAnnounceRequest(pageNo, numOfRows int) (*http.Request, error) {
@@ -38,6 +40,8 @@ func createBidAnnounceRequest(pageNo, numOfRows int) (*http.Request, error) {
 }
 
 func FetchBidAnnouncements() ([]BidItem, error) {
+	localCache = cache.New(12*time.Hour, 24*time.Hour)
+
 	req, err := createBidAnnounceRequest(1, 10)
 	if err != nil {
 		return nil, err
@@ -70,7 +74,7 @@ func FetchBidAnnouncements() ([]BidItem, error) {
 	return apiResp.Response.Body.Items, nil
 }
 
-func helloHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func fetchBidAnnouncementToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	bidAnnouncements, err := FetchBidAnnouncements()
 	if err != nil {
 		return nil, err
@@ -82,6 +86,33 @@ func helloHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTo
 	}
 
 	return mcp.NewToolResultText(string(bytes)), nil
+}
+
+func main() {
+	log.Println("server started")
+	serviceKey = os.Getenv("serviceKey")
+	s := server.NewMCPServer(
+		"g2b",
+		"1.0.0",
+		server.WithToolCapabilities(false),
+	)
+
+	fetchBidAnnouncementTool := mcp.NewTool("search_bid_announcements",
+		mcp.WithDescription("나라장터 공고 검색 mcp 툴입니다."),
+		mcp.WithString(
+			"bidStartDate",
+			mcp.Description("입찰 공고 시작일, YYYYMMDDHHMM"),
+		),
+		mcp.WithString(
+			"bidEndDate",
+			mcp.Description("입찰 공고 종료일, YYYYMMDDHHMM"),
+		),
+	)
+
+	s.AddTool(fetchBidAnnouncementTool, fetchBidAnnouncementToolHandler)
+	if err := server.ServeStdio(s); err != nil {
+		fmt.Printf("server error: %v\n", err)
+	}
 }
 
 type BidAnnouncementAPIResponse struct {
@@ -146,31 +177,4 @@ type BidItem struct {
 	BidprcPsblIndstrytyNm      string `json:"bidprcPsblIndstrytyNm"`      // 입찰참가가능업종명
 	BidNtceUrl                 string `json:"bidNtceUrl"`                 // 입찰공고URL
 	DataBssDate                string `json:"dataBssDate"`                // 데이터기준일자
-}
-
-func main() {
-	log.Println("server started")
-	serviceKey = os.Getenv("serviceKey")
-	s := server.NewMCPServer(
-		"g2b",
-		"1.0.0",
-		server.WithToolCapabilities(false),
-	)
-
-	searchTool := mcp.NewTool("search_bid_announcements",
-		mcp.WithDescription("나라장터 공고 검색 mcp 툴입니다."),
-		mcp.WithString(
-			"bidStartDate",
-			mcp.Description("입찰 공고 시작일, YYYYMMDDHHMM"),
-		),
-		mcp.WithString(
-			"bidEndDate",
-			mcp.Description("입찰 공고 종료일, YYYYMMDDHHMM"),
-		),
-	)
-
-	s.AddTool(searchTool, helloHandler)
-	if err := server.ServeStdio(s); err != nil {
-		fmt.Printf("server error: %v\n", err)
-	}
 }
